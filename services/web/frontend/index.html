@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenImpact</title>
+    <link rel="stylesheet" href="static/css/style.css">
+</head>
+
+<body>
+    <header>
+        <h1>OpenImpact</h1>
+        <nav>
+            <ul>
+                <li><a href="#papers">논문 검색</a></li>
+                <li><a href="#analysis">분석</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        <section id="search">
+            <h2>논문 검색</h2>
+            <div class="search-box">
+                <input type="text" id="search-input" placeholder="검색어를 입력하세요...">
+                <button onclick="searchPapers()">검색</button>
+            </div>
+            <div id="search-results">
+                <!-- 검색 결과가 여기에 표시됩니다 -->
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>© 2024 OpenImpact</p>
+    </footer>
+
+    <script src="static/js/main.js"></script>
+</body>
+
+</html>
