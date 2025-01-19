@@ -7,6 +7,14 @@ import requests
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 from dataclasses import dataclass
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -43,21 +51,18 @@ class ArxivPaperCrawler(ArxivBaseCrawler):
     """Crawler for individual arXiv papers"""
     def get_paper_from_url(self, url: str) -> ArxivPaper:
         """Get paper information from arXiv URL"""
-        # Normalize URL format
-        if "arxiv.org/abs/" in url:
-            paper_id = url.split("arxiv.org/abs/")[-1]
-            url = f"https://arxiv.org/abs/{paper_id}"
+        logger.debug(f"Starting to crawl paper from URL: {url}")
+        
+        # Normalize URL
+        url = self._normalize_url(url)
         
         # Get paper page
         paper_page = self._make_request(url)
         paper_soup = BeautifulSoup(paper_page.text, "html.parser")
         
-        # Extract title
-        title = paper_soup.find("h1", class_="title").text.strip().replace("Title:", "").strip()
-        
-        # Extract comment if exists
-        comment_tag = paper_soup.find("td", class_="tablecell comments")
-        comment = comment_tag.text.strip() if comment_tag else ""
+        # Extract basic information
+        title = self._extract_title(paper_soup)
+        comment = self._extract_comment(paper_soup)
         
         # Create paper object
         paper = ArxivPaper(url=url, title=title, comment=comment)
@@ -68,9 +73,38 @@ class ArxivPaperCrawler(ArxivBaseCrawler):
         # Try to get full content
         html_link = self.get_html_experimental_link(paper_soup)
         if html_link != "Link not found":
-            paper.full_content = self.get_paper_full_content(html_link)
-            
+            logger.debug(f"Found HTML experimental link for {title}")
+            try:
+                paper.full_content = self.get_paper_full_content(html_link)
+            except Exception as e:
+                logger.error(f"Failed to get full content: {str(e)}")
+        
         return paper
+
+    def _normalize_url(self, url: str) -> str:
+        """Normalize arXiv URL format"""
+        if "arxiv.org/abs/" in url:
+            paper_id = url.split("arxiv.org/abs/")[-1]
+            return f"https://arxiv.org/abs/{paper_id}"
+        return url
+
+    def _extract_title(self, soup: BeautifulSoup) -> str:
+        """Extract paper title from soup"""
+        try:
+            title_tag = soup.find("h1", class_="title")
+            return title_tag.text.strip().replace("Title:", "").strip()
+        except Exception as e:
+            logger.error(f"Failed to extract title: {str(e)}")
+            raise
+
+    def _extract_comment(self, soup: BeautifulSoup) -> str:
+        """Extract paper comment from soup"""
+        try:
+            comment_tag = soup.find("td", class_="tablecell comments")
+            return comment_tag.text.strip() if comment_tag else ""
+        except Exception as e:
+            logger.error(f"Failed to extract comment: {str(e)}")
+            return ""
 
     def get_paper_abstract(self, soup: BeautifulSoup) -> str:
         """Get abstract from paper soup"""
@@ -126,23 +160,50 @@ class ArxivListCrawler(ArxivBaseCrawler):
 
     def get_paper_list(self, field: str) -> List[ArxivPaper]:
         """Get list of papers from specific field"""
+        logger.info(f"Starting to crawl papers from field: {field}")
+        
+        # Get list page
         list_url = f"https://arxiv.org/list/{field}/pastweek?skip=0&show={self.max_nb_crawl}"
         list_page = self._make_request(list_url)
         list_soup = BeautifulSoup(list_page.text, "html.parser")
 
-        papers: List[ArxivPaper] = []
+        # Find paper entries
         dt_tags = list_soup.find_all("dt")
         dd_tags = list_soup.find_all("dd")
+        
+        total_papers = len(dt_tags)
+        logger.info(f"Found {total_papers} papers to crawl")
 
-        for dt_tag, dd_tag in zip(dt_tags, dd_tags):
-            # Get paper URL
-            paper_url = "https://arxiv.org" + dt_tag.find("a", {"title": "Abstract"})["href"]
-            
-            # Get paper details using paper crawler
-            paper = self.paper_crawler.get_paper_from_url(paper_url)
-            papers.append(paper)
+        papers: List[ArxivPaper] = []
+        for dt_tag, dd_tag in tqdm(
+            zip(dt_tags, dd_tags),
+            total=total_papers,
+            desc=f"Crawling {field}",
+            unit="paper"
+        ):
+            paper_url = self._extract_paper_url(dt_tag)
+            if not paper_url:
+                continue
+                
+            try:
+                paper = self.paper_crawler.get_paper_from_url(paper_url)
+                papers.append(paper)
+                logger.debug(f"Successfully crawled paper: {paper.title}")
+            except Exception as e:
+                logger.error(f"Failed to crawl paper from {paper_url}: {str(e)}")
+                continue
 
+        logger.info(f"Successfully crawled {len(papers)}/{total_papers} papers from {field}")
         return papers
+
+    def _extract_paper_url(self, dt_tag: BeautifulSoup) -> Optional[str]:
+        """Extract paper URL from dt tag"""
+        try:
+            url_path = dt_tag.find("a", {"title": "Abstract"})["href"]
+            return "https://arxiv.org" + url_path
+        except Exception as e:
+            logger.error(f"Failed to extract paper URL: {str(e)}")
+            return None
 
 
 class ArxivCrawler:
@@ -150,7 +211,7 @@ class ArxivCrawler:
     def __init__(
         self,
         base_dir: str,
-        max_nb_crawl: int = 100,
+        max_nb_crawl: int,
         max_retries: int = 3,
         retry_delay: int = 15
     ):
@@ -195,9 +256,9 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="ArXiv Crawler")
     parser.add_argument("--base_dir", type=str, default="./arxiv_data", help="Base directory for storing data")
-    parser.add_argument("--field", type=str, help="ArXiv field to crawl (e.g., cs.AI)")
-    parser.add_argument("--url", type=str, help="Single ArXiv paper URL to crawl")
-    parser.add_argument("--max_papers", type=int, default=100, help="Maximum number of papers to crawl")
+    parser.add_argument("--field", type=str, default="cs.CL", help="ArXiv field to crawl (e.g., cs.AI)")
+    parser.add_argument("--url", type=str, default=None, help="Single ArXiv paper URL to crawl")
+    parser.add_argument("--max_papers", type=int, default=50, help="Maximum number of papers to crawl")
     
     args = parser.parse_args()
     
